@@ -1,0 +1,17 @@
+# No subir datos reales (ECID es información de visitante — no debe
+# terminar en un repo de GitHub, aunque sea privado).
+input/*
+!input/.gitkeep
+
+output/*
+!output/.gitkeep
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# OS / editor
+.DS_Store
+.vscode/
