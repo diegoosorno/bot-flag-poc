@@ -79,3 +79,23 @@ UPLOAD_LIST_DELIMITER = ","
 HTTP_TIMEOUT = 60
 STATUS_POLL_INTERVAL = 10
 STATUS_POLL_MAX_ATTEMPTS = 60   # ~10 min máximo esperando cada job
+
+# ------------------------------------------------------------------
+# CONCURRENCIA Y RATE LIMIT (subida de muchas partes en paralelo)
+# ------------------------------------------------------------------
+# El flujo procesa los archivos en dos fases paralelas: primero sube y
+# confirma todos los jobs, luego hace polling de todos hasta que terminen.
+# Así el tiempo deja de ser lineal (Nx el tiempo de procesamiento) y queda
+# acotado por la fase más lenta.
+#
+# La Analytics 2.0 API impone ~120 requests/minuto por usuario (12 cada 6s);
+# al pasarse devuelve HTTP 429. Por eso la concurrencia es baja por defecto y
+# hay reintentos con backoff ante 429/5xx. Súbela con cuidado si tu cuenta
+# tiene un límite mayor.
+UPLOAD_CONCURRENCY = 4          # subidas (create+upload+commit) en paralelo
+POLL_CONCURRENCY = 4            # jobs consultados en paralelo durante el polling
+
+# Reintentos ante rate limit (429) o errores transitorios de servidor (5xx).
+RETRY_MAX_ATTEMPTS = 5          # intentos totales por request antes de fallar
+RETRY_BACKOFF_BASE = 2.0        # segundos; el backoff es BASE * 2**(intento-1)
+RETRY_BACKOFF_MAX = 30.0        # tope del backoff por intento

@@ -105,6 +105,7 @@ ADOBE_CLIENT_ID=...        # client_id del proyecto de Developer Console
 ADOBE_CLIENT_SECRET=...    # client_secret — NUNCA en el código
 ADOBE_DATASET_ID=...       # dataset de clasificación de eVar23
 # Opcionales:
+ADOBE_RSID=...             # report suite ID; lo usa --list-datasets (o --rsid)
 ADOBE_COMPANY_ID=...       # si se omite, se descubre vía Discovery API
 ADOBE_SCOPES=...           # si se omite, usa el default de config.py
 ```
@@ -119,12 +120,22 @@ export ADOBE_DATASET_ID=...
 
 ### Cómo hallar el DATASET_ID (una sola vez)
 
+El listado de datasets de la Classifications API 2.0 es **por report
+suite**, así que necesitas indicar el RSID (con `--rsid` o la variable
+`ADOBE_RSID`):
+
 ```bash
+python upload_classifications.py --list-datasets --rsid tu_report_suite
+# o, si ya definiste ADOBE_RSID en .env:
 python upload_classifications.py --list-datasets
 ```
 
-Busca en la salida el dataset asociado a la clasificación de `eVar23` y
-copia su id a `ADOBE_DATASET_ID`.
+En la salida busca la entrada cuyo `id` sea `evar23`: el valor de
+`datasets` es el id que debes copiar a `ADOBE_DATASET_ID`.
+
+> El `DATASET_ID` de esta API es el id de un *Classification Set* de
+> Adobe Analytics (Components > Classification Sets), no de un dataset de
+> Experience Platform.
 
 ### Subir
 
@@ -134,10 +145,50 @@ python upload_classifications.py
 
 # Sube uno específico:
 python upload_classifications.py --file output/bot_flag_upload_part2.csv
+
+# Sube y confirma todo, pero NO espera el procesamiento (fire-and-forget):
+python upload_classifications.py --no-wait
 ```
 
 El script imprime el estado de cada job y sale con código distinto de 0
 si alguno falló, para poder encadenarlo en CI/cron.
+
+### Rendimiento con muchas partes
+
+Con decenas o cientos de partes, el flujo **no** procesa un archivo y se
+queda esperando a que Adobe lo termine antes de pasar al siguiente. En su
+lugar trabaja en dos fases paralelas:
+
+1. **Subida:** `create + upload + commit` de todos los archivos en
+   paralelo. El procesamiento del import corre en los servidores de Adobe,
+   así que no hace falta esperarlo para lanzar el siguiente.
+2. **Polling:** consulta el estado de todos los jobs confirmados en
+   paralelo, en rondas, hasta que terminan.
+
+Así el tiempo total queda acotado por la fase más lenta y no por la suma
+de los tiempos de procesamiento de cada job. Si solo quieres subir y
+verificar después, usa `--no-wait` (hace únicamente la fase 1).
+
+La API 2.0 aplica un límite de ~120 requests/minuto por usuario y devuelve
+HTTP 429 al pasarse
+([FAQ de la API 2.0](https://dev.adobe.com/analytics-apis/docs/2.0/guides/faq)).
+Por eso la concurrencia por defecto es baja y cada request reintenta con
+backoff exponencial ante 429 o errores 5xx. Los parámetros están en
+`config.py` y puedes ajustarlos según el límite de tu cuenta:
+
+```python
+UPLOAD_CONCURRENCY = 4     # subidas simultáneas
+POLL_CONCURRENCY   = 4     # jobs consultados a la vez en el polling
+RETRY_MAX_ATTEMPTS = 5     # reintentos por request ante 429/5xx
+RETRY_BACKOFF_BASE = 2.0   # segundos; backoff = BASE * 2**(intento-1)
+RETRY_BACKOFF_MAX  = 30.0  # tope del backoff por intento
+```
+
+> Nota: cada archivo consume 3 requests en la fase de subida
+> (create+upload+commit) más 1 por ronda de polling. Con 100 partes son
+> ~300 requests solo en la subida; si subes la concurrencia demasiado,
+> puedes toparte con el rate limit. Contenido reformulado para cumplir con
+> restricciones de licencia respecto a la documentación de Adobe.
 
 > Nota: los nombres exactos de campos de la API 2.0 (p. ej. el campo del
 > multipart en `uploadFile` y las claves del JSON de respuesta) pueden
