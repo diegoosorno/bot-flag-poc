@@ -1,101 +1,101 @@
 """
-Configuración del proyecto Bot Flag POC.
-Ajustar aquí los parámetros específicos del caso — no modificar la
-lógica de procesamiento en process_bot_flags.py para cambiar esto.
+Bot Flag POC project configuration.
+Adjust the case-specific parameters here — do not change the processing
+logic in process_bot_flags.py just to tweak these values.
 """
 
 import os
 
 # ============================================================
-# CARPETAS
+# FOLDERS
 # ============================================================
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 INPUT_FOLDER = os.path.join(BASE_DIR, "input")
 OUTPUT_FOLDER = os.path.join(BASE_DIR, "output")
 
 # ============================================================
-# COLUMNAS DE ENTRADA (export de Adobe Data Warehouse)
+# INPUT COLUMNS (Adobe Data Warehouse export)
 # ============================================================
 ECID_COLUMN = "Marketing Cloud Visitor ID"
 
 # ============================================================
-# COLUMNAS DE SALIDA (formato Classification/SAINT para eVar23)
+# OUTPUT COLUMNS (Classification/SAINT format for eVar23)
 # ============================================================
 OUTPUT_KEY_COLUMN = "Key"
 OUTPUT_FLAG_COLUMN = "Bot Flag"
 
 # ============================================================
-# MAPEO DE ARCHIVO -> NIVEL DE CONFIANZA
+# FILE -> CONFIDENCE LEVEL MAPPING
 # ============================================================
-# El script busca archivos en INPUT_FOLDER cuyo nombre EMPIECE con
-# cada uno de estos patrones (sin importar la extensión: .zip o .csv).
+# The script looks in INPUT_FOLDER for files whose name STARTS WITH
+# each of these patterns (regardless of extension: .zip or .csv).
 TIER_MAP = {
     "Bots_Tier_1": "high",
     "Bots_Tier_2": "medium",
     "Bots_Tier_3": "low",
 }
 
-# Prioridad para reconciliar ECIDs que aparecen en más de un tier
-# (gana el número más alto).
+# Priority for reconciling ECIDs that appear in more than one tier
+# (the highest number wins).
 TIER_PRIORITY = {"high": 3, "medium": 2, "low": 1}
 
 # ============================================================
-# LÍMITES DE PROCESAMIENTO
+# PROCESSING LIMITS
 # ============================================================
-MAX_OUTPUT_SIZE_MB = 50    # el CSV final se divide en partes si excede esto
-CHUNK_SIZE = 200_000       # filas por chunk al leer archivos grandes
+MAX_OUTPUT_SIZE_MB = 50    # the final CSV is split into parts if it exceeds this
+CHUNK_SIZE = 200_000       # rows per chunk when reading large files
 
 # ============================================================
-# SUBIDA VÍA CLASSIFICATIONS API 2.0 (upload_classifications.py)
+# UPLOAD VIA CLASSIFICATIONS API 2.0 (upload_classifications.py)
 # ============================================================
-# IMPORTANTE: aquí NO se ponen secretos. Las credenciales se leen SIEMPRE
-# desde variables de entorno (ver README). Estos son solo endpoints y
-# parámetros no sensibles.
+# IMPORTANT: no secrets go here. Credentials are ALWAYS read from
+# environment variables (see README). These are only non-sensitive
+# endpoints and parameters.
 #
-# Variables de entorno requeridas:
-#   ADOBE_CLIENT_ID       -> client_id del proyecto de Developer Console
-#   ADOBE_CLIENT_SECRET   -> client_secret (NUNCA lo escribas en el código)
-#   ADOBE_DATASET_ID      -> id del dataset de clasificación de eVar23
-# Opcionales:
-#   ADOBE_COMPANY_ID      -> global company id (si no, se descubre vía API)
-#   ADOBE_SCOPES          -> scopes OAuth (separados por coma)
+# Required environment variables:
+#   ADOBE_CLIENT_ID       -> client_id of the Developer Console project
+#   ADOBE_CLIENT_SECRET   -> client_secret (NEVER write it in the code)
+#   ADOBE_DATASET_ID      -> id of the eVar23 classification dataset
+# Optional:
+#   ADOBE_COMPANY_ID      -> global company id (if unset, discovered via API)
+#   ADOBE_SCOPES          -> OAuth scopes (comma-separated)
 
-# Endpoint de IMS para OAuth Server-to-Server (client credentials).
+# IMS endpoint for OAuth Server-to-Server (client credentials).
 IMS_TOKEN_URL = "https://ims-na1.adobelogin.com/ims/token/v3"
 
-# Scopes por defecto para la API de Adobe Analytics (ajustables por env).
+# Default scopes for the Adobe Analytics API (overridable via env).
 DEFAULT_SCOPES = "openid,AdobeID,additional_info.projectedProductContext,read_organizations,additional_info.roles,session"
 
-# Base de la API de Analytics 2.0.
+# Base of the Analytics 2.0 API.
 ANALYTICS_API_HOST = "https://analytics.adobe.io"
 DISCOVERY_URL = f"{ANALYTICS_API_HOST}/discovery/me"
 
-# Formato con el que se declara el archivo al crear el job.
-UPLOAD_DATA_FORMAT = "csv"     # nuestro output es CSV (Key,Bot Flag)
+# Format the file is declared with when creating the job.
+UPLOAD_DATA_FORMAT = "csv"     # our output is CSV (Key,Bot Flag)
 UPLOAD_ENCODING = "UTF8"
 UPLOAD_LIST_DELIMITER = ","
 
-# Timeouts (segundos) y polling de estado.
+# Timeouts (seconds) and status polling.
 HTTP_TIMEOUT = 60
 STATUS_POLL_INTERVAL = 10
-STATUS_POLL_MAX_ATTEMPTS = 60   # ~10 min máximo esperando cada job
+STATUS_POLL_MAX_ATTEMPTS = 60   # ~10 min max waiting for each job
 
 # ------------------------------------------------------------------
-# CONCURRENCIA Y RATE LIMIT (subida de muchas partes en paralelo)
+# CONCURRENCY AND RATE LIMIT (uploading many parts in parallel)
 # ------------------------------------------------------------------
-# El flujo procesa los archivos en dos fases paralelas: primero sube y
-# confirma todos los jobs, luego hace polling de todos hasta que terminen.
-# Así el tiempo deja de ser lineal (Nx el tiempo de procesamiento) y queda
-# acotado por la fase más lenta.
+# The flow processes files in two parallel phases: first it uploads and
+# commits all jobs, then it polls all of them until they finish. This way
+# the total time is no longer linear (Nx the processing time) and is instead
+# bounded by the slowest phase.
 #
-# La Analytics 2.0 API impone ~120 requests/minuto por usuario (12 cada 6s);
-# al pasarse devuelve HTTP 429. Por eso la concurrencia es baja por defecto y
-# hay reintentos con backoff ante 429/5xx. Súbela con cuidado si tu cuenta
-# tiene un límite mayor.
-UPLOAD_CONCURRENCY = 4          # subidas (create+upload+commit) en paralelo
-POLL_CONCURRENCY = 4            # jobs consultados en paralelo durante el polling
+# The Analytics 2.0 API enforces ~120 requests/minute per user (12 every 6s);
+# exceeding it returns HTTP 429. That is why concurrency is low by default and
+# there are retries with backoff on 429/5xx. Raise it carefully if your account
+# has a higher limit.
+UPLOAD_CONCURRENCY = 4          # uploads (create+upload+commit) in parallel
+POLL_CONCURRENCY = 4            # jobs polled in parallel during polling
 
-# Reintentos ante rate limit (429) o errores transitorios de servidor (5xx).
-RETRY_MAX_ATTEMPTS = 5          # intentos totales por request antes de fallar
-RETRY_BACKOFF_BASE = 2.0        # segundos; el backoff es BASE * 2**(intento-1)
-RETRY_BACKOFF_MAX = 30.0        # tope del backoff por intento
+# Retries on rate limit (429) or transient server errors (5xx).
+RETRY_MAX_ATTEMPTS = 5          # total attempts per request before failing
+RETRY_BACKOFF_BASE = 2.0        # seconds; backoff is BASE * 2**(attempt-1)
+RETRY_BACKOFF_MAX = 30.0        # cap on the per-attempt backoff

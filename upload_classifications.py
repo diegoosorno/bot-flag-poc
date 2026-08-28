@@ -1,56 +1,56 @@
 """
-Bot Flag POC — subida automática a Adobe Analytics Classifications API 2.0
+Bot Flag POC — automated upload to Adobe Analytics Classifications API 2.0
 
-Toma los CSV generados por process_bot_flags.py (output/bot_flag_upload*.csv,
-columnas Key,Bot Flag) y los sube al dataset de clasificación de eVar23 usando
-el flujo de import por archivo de la Classifications API 2.0:
+Takes the CSVs produced by process_bot_flags.py (output/bot_flag_upload*.csv,
+columns Key,Bot Flag) and uploads them to the eVar23 classification dataset
+using the Classifications API 2.0 file-import flow:
 
-    1. createApiJob   -> crea el job de import y devuelve api_job_id
-    2. uploadFile     -> sube el CSV (multipart) asociado al api_job_id
-    3. commitApiJob   -> confirma el import
-    4. (polling)      -> consulta el estado hasta que termine
+    1. createApiJob   -> creates the import job and returns api_job_id
+    2. uploadFile     -> uploads the CSV (multipart) tied to the api_job_id
+    3. commitApiJob   -> confirms the import
+    4. (polling)      -> checks the status until it finishes
 
-Para muchas partes, el trabajo se hace en DOS fases paralelas en vez de
-procesar cada archivo de forma secuencial y bloqueante:
-    Fase 1: create+upload+commit de todos los archivos en paralelo
-            (acotado por config.UPLOAD_CONCURRENCY).
-    Fase 2: polling en paralelo de todos los jobs confirmados
-            (acotado por config.POLL_CONCURRENCY).
-Así el tiempo total queda acotado por la fase más lenta, no por la suma de
-los tiempos de procesamiento de cada job. Con --no-wait solo se hace la
-fase 1 (fire-and-forget). Ante HTTP 429 (rate limit de la API 2.0, ~120
-req/min por usuario) o 5xx, cada request reintenta con backoff exponencial.
+For many parts, the work is done in TWO parallel phases instead of processing
+each file sequentially and blocking:
+    Phase 1: create+upload+commit of all files in parallel
+             (bounded by config.UPLOAD_CONCURRENCY).
+    Phase 2: parallel polling of all committed jobs
+             (bounded by config.POLL_CONCURRENCY).
+This way the total time is bounded by the slowest phase, not by the sum of each
+job's processing time. With --no-wait only phase 1 runs (fire-and-forget). On
+HTTP 429 (API 2.0 rate limit, ~120 req/min per user) or 5xx, each request
+retries with exponential backoff.
 
-Autenticación: OAuth Server-to-Server (client credentials) contra Adobe IMS.
-JWT quedó deprecado; este script usa el flujo actual.
+Authentication: OAuth Server-to-Server (client credentials) against Adobe IMS.
+JWT is deprecated; this script uses the current flow.
 
---- SEGURIDAD ---
-Las credenciales se leen EXCLUSIVAMENTE de variables de entorno; nunca se
-escriben en el repo ni se imprimen. Los ECID son datos de visitante (PII):
-no se loggea el contenido de las filas. TLS siempre verificado.
+--- SECURITY ---
+Credentials are read EXCLUSIVELY from environment variables; they are never
+written in the repo or printed. ECIDs are visitor data (PII): row contents are
+not logged. TLS is always verified.
 
-Variables de entorno (ver README):
-    ADOBE_CLIENT_ID      (requerida)
-    ADOBE_CLIENT_SECRET  (requerida)
-    ADOBE_DATASET_ID     (requerida)
-    ADOBE_RSID           (opcional; usada por --list-datasets para hallar el
-                          DATASET_ID. También se puede pasar con --rsid)
-    ADOBE_COMPANY_ID     (opcional; si falta se descubre vía Discovery API)
-    ADOBE_SCOPES         (opcional; default en config.DEFAULT_SCOPES)
+Environment variables (see README):
+    ADOBE_CLIENT_ID      (required)
+    ADOBE_CLIENT_SECRET  (required)
+    ADOBE_DATASET_ID     (required)
+    ADOBE_RSID           (optional; used by --list-datasets to find the
+                          DATASET_ID. Can also be passed with --rsid)
+    ADOBE_COMPANY_ID     (optional; if missing, discovered via Discovery API)
+    ADOBE_SCOPES         (optional; default in config.DEFAULT_SCOPES)
 
-Uso:
-    export ADOBE_CLIENT_ID=...       # nunca lo pongas en el código
+Usage:
+    export ADOBE_CLIENT_ID=...       # never put it in the code
     export ADOBE_CLIENT_SECRET=...
     export ADOBE_DATASET_ID=...
 
-    # Subir todos los CSV de output/:
+    # Upload all CSVs in output/:
     python upload_classifications.py
 
-    # Descubrir el DATASET_ID de tus clasificaciones (una sola vez).
-    # Requiere el report suite ID (RSID), vía --rsid o ADOBE_RSID:
-    python upload_classifications.py --list-datasets --rsid tu_report_suite
+    # Discover the DATASET_ID of your classifications (one time only).
+    # Requires the report suite ID (RSID), via --rsid or ADOBE_RSID:
+    python upload_classifications.py --list-datasets --rsid your_report_suite
 
-    # Subir un archivo específico:
+    # Upload a specific file:
     python upload_classifications.py --file output/bot_flag_upload_part2.csv
 """
 
@@ -66,8 +66,8 @@ import requests
 
 import config
 
-# Carga .env si python-dotenv está instalado (opcional). Si no lo está, el
-# script sigue funcionando con variables ya exportadas en el entorno.
+# Load .env if python-dotenv is installed (optional). If it is not, the
+# script still works with variables already exported in the environment.
 try:
     from dotenv import load_dotenv
 
@@ -77,31 +77,31 @@ except ImportError:
 
 
 class ConfigError(Exception):
-    """Falta configuración (credenciales/env) necesaria para operar."""
+    """Missing configuration (credentials/env) needed to operate."""
 
 
 class UploadError(Exception):
-    """Error durante el flujo de import contra la API."""
+    """Error during the import flow against the API."""
 
 
 # ------------------------------------------------------------------
-# Credenciales y autenticación
+# Credentials and authentication
 # ------------------------------------------------------------------
 def _require_env(name):
-    """Lee una variable de entorno obligatoria sin exponer su valor."""
+    """Read a required environment variable without exposing its value."""
     value = os.environ.get(name)
     if not value:
         raise ConfigError(
-            f"Falta la variable de entorno {name}. Expórtala antes de correr "
-            f"el script (no la escribas en el código ni en el repo)."
+            f"Missing environment variable {name}. Export it before running "
+            f"the script (do not write it in the code or in the repo)."
         )
     return value
 
 
 def get_access_token():
     """
-    Obtiene un access token de Adobe IMS con el flujo client_credentials.
-    No imprime ni devuelve el client_secret; el token no se loggea.
+    Get an access token from Adobe IMS using the client_credentials flow.
+    Does not print or return the client_secret; the token is not logged.
     """
     client_id = _require_env("ADOBE_CLIENT_ID")
     client_secret = _require_env("ADOBE_CLIENT_SECRET")
@@ -116,17 +116,17 @@ def get_access_token():
             "scope": scopes,
         },
         timeout=config.HTTP_TIMEOUT,
-        # verify=True es el default de requests; TLS se valida siempre.
+        # verify=True is the requests default; TLS is always validated.
     )
     if resp.status_code != 200:
-        # Mensaje genérico: no incluimos el cuerpo por si trae detalles sensibles.
+        # Generic message: we do not include the body in case it has sensitive details.
         raise UploadError(
-            f"No se pudo obtener el access token de IMS (HTTP {resp.status_code}). "
-            f"Verifica ADOBE_CLIENT_ID / ADOBE_CLIENT_SECRET / ADOBE_SCOPES."
+            f"Could not obtain the IMS access token (HTTP {resp.status_code}). "
+            f"Check ADOBE_CLIENT_ID / ADOBE_CLIENT_SECRET / ADOBE_SCOPES."
         )
     token = resp.json().get("access_token")
     if not token:
-        raise UploadError("La respuesta de IMS no incluyó access_token.")
+        raise UploadError("The IMS response did not include an access_token.")
     return client_id, token
 
 
@@ -142,36 +142,37 @@ def _auth_headers(client_id, token, content_type="application/json"):
 
 def _request_with_retry(method, url, **kwargs):
     """
-    Ejecuta una request reintentando ante rate limit (HTTP 429) y errores
-    transitorios de servidor (5xx), con backoff exponencial + jitter.
+    Execute a request retrying on rate limit (HTTP 429) and transient server
+    errors (5xx), with exponential backoff + jitter.
 
-    Devuelve la Response cuando el status NO es 429/5xx (el caller decide si
-    ese status es aceptable). Lanza UploadError solo si se agotan los intentos
-    contra 429/5xx, o requests.RequestException ante fallos de red repetidos.
+    Returns the Response when the status is NOT 429/5xx (the caller decides
+    whether that status is acceptable). Raises UploadError only if the retries
+    against 429/5xx are exhausted, or requests.RequestException on repeated
+    network failures.
 
-    Es seguro para uso concurrente: no comparte estado mutable.
+    It is safe for concurrent use: it shares no mutable state.
     """
     last_exc = None
     for attempt in range(1, config.RETRY_MAX_ATTEMPTS + 1):
         try:
             resp = requests.request(method, url, **kwargs)
         except requests.RequestException as exc:
-            # Fallo de red: reintentar salvo que sea el último intento.
+            # Network failure: retry unless this is the last attempt.
             last_exc = exc
             if attempt == config.RETRY_MAX_ATTEMPTS:
                 raise
             _sleep_backoff(attempt)
             continue
 
-        # 429 = rate limit; 5xx = error transitorio de servidor -> reintentar.
+        # 429 = rate limit; 5xx = transient server error -> retry.
         if resp.status_code == 429 or 500 <= resp.status_code < 600:
             if attempt == config.RETRY_MAX_ATTEMPTS:
                 raise UploadError(
-                    f"La API respondió {resp.status_code} tras "
-                    f"{config.RETRY_MAX_ATTEMPTS} intentos en {method} {_safe_path(url)}. "
-                    f"Puede ser rate limit (429); baja UPLOAD_CONCURRENCY/POLL_CONCURRENCY."
+                    f"The API responded {resp.status_code} after "
+                    f"{config.RETRY_MAX_ATTEMPTS} attempts on {method} {_safe_path(url)}. "
+                    f"It may be rate limiting (429); lower UPLOAD_CONCURRENCY/POLL_CONCURRENCY."
                 )
-            # Respeta Retry-After si viene; si no, backoff exponencial.
+            # Respect Retry-After if present; otherwise exponential backoff.
             retry_after = resp.headers.get("Retry-After")
             if retry_after and retry_after.isdigit():
                 time.sleep(min(int(retry_after), config.RETRY_BACKOFF_MAX))
@@ -181,14 +182,14 @@ def _request_with_retry(method, url, **kwargs):
 
         return resp
 
-    # No debería alcanzarse, pero por seguridad:
+    # Should not be reached, but just in case:
     if last_exc:
         raise last_exc
-    raise UploadError(f"No se pudo completar {method} {_safe_path(url)}.")
+    raise UploadError(f"Could not complete {method} {_safe_path(url)}.")
 
 
 def _sleep_backoff(attempt):
-    """Backoff exponencial acotado con jitter para no sincronizar hilos."""
+    """Bounded exponential backoff with jitter to avoid synchronizing threads."""
     delay = min(
         config.RETRY_BACKOFF_BASE * (2 ** (attempt - 1)),
         config.RETRY_BACKOFF_MAX,
@@ -197,15 +198,15 @@ def _sleep_backoff(attempt):
 
 
 def _safe_path(url):
-    """Devuelve solo el path de la URL para logs (evita filtrar query/host)."""
+    """Return only the URL path for logs (avoids leaking query/host)."""
     return url.split("//", 1)[-1].split("/", 1)[-1].split("?", 1)[0]
 
 
 # ------------------------------------------------------------------
-# Descubrimiento de company id y datasets
+# Company id and dataset discovery
 # ------------------------------------------------------------------
 def get_company_id(client_id, token):
-    """Devuelve el global company id (de env, o vía Discovery API)."""
+    """Return the global company id (from env, or via Discovery API)."""
     env_company = os.environ.get("ADOBE_COMPANY_ID")
     if env_company:
         return env_company
@@ -218,8 +219,8 @@ def get_company_id(client_id, token):
     )
     if resp.status_code != 200:
         raise UploadError(
-            f"Discovery API falló (HTTP {resp.status_code}). Define ADOBE_COMPANY_ID "
-            f"manualmente para saltarte este paso."
+            f"Discovery API failed (HTTP {resp.status_code}). Set ADOBE_COMPANY_ID "
+            f"manually to skip this step."
         )
     data = resp.json()
     for org in data.get("imsOrgs", []):
@@ -228,8 +229,8 @@ def get_company_id(client_id, token):
             if gid:
                 return gid
     raise UploadError(
-        "No se encontró globalCompanyId en la respuesta de Discovery. "
-        "Define ADOBE_COMPANY_ID manualmente."
+        "globalCompanyId not found in the Discovery response. "
+        "Set ADOBE_COMPANY_ID manually."
     )
 
 
@@ -239,12 +240,12 @@ def _api_base(company_id):
 
 def list_datasets(client_id, token, company_id, rsid):
     """
-    Lista los datasets de clasificación de un report suite (RSID) para
-    ayudar a hallar el DATASET_ID.
+    List the classification datasets of a report suite (RSID) to help find
+    the DATASET_ID.
 
-    La Classifications API 2.0 no expone un listado global de datasets: el
-    endpoint requiere el report suite ID y devuelve, por cada dimensión
-    (evar/prop), los dataset IDs asociados.
+    The Classifications API 2.0 does not expose a global dataset listing: the
+    endpoint requires the report suite ID and returns, for each dimension
+    (evar/prop), the associated dataset IDs.
         GET /api/{company}/classifications/datasets/compatibilityMetrics/{rsid}
     """
     url = f"{_api_base(company_id)}/classifications/datasets/compatibilityMetrics/{rsid}"
@@ -256,15 +257,15 @@ def list_datasets(client_id, token, company_id, rsid):
     )
     if resp.status_code != 200:
         raise UploadError(
-            f"No se pudieron listar los datasets del report suite '{rsid}' "
-            f"(HTTP {resp.status_code}). Verifica que el RSID sea correcto y que "
-            f"el proyecto tenga acceso a ese report suite."
+            f"Could not list the datasets of report suite '{rsid}' "
+            f"(HTTP {resp.status_code}). Check that the RSID is correct and that "
+            f"the project has access to that report suite."
         )
     return resp.json()
 
 
 # ------------------------------------------------------------------
-# Flujo de import por archivo
+# File-import flow
 # ------------------------------------------------------------------
 def create_job(client_id, token, company_id, dataset_id, job_name):
     url = f"{_api_base(company_id)}/classifications/job/import/createApiJob/{dataset_id}"
@@ -284,23 +285,23 @@ def create_job(client_id, token, company_id, dataset_id, job_name):
     )
     if resp.status_code not in (200, 201):
         raise UploadError(
-            f"createApiJob falló para dataset {dataset_id} (HTTP {resp.status_code})."
+            f"createApiJob failed for dataset {dataset_id} (HTTP {resp.status_code})."
         )
     data = resp.json()
     job_id = data.get("api_job_id") or data.get("apiJobId") or data.get("jobId")
     if not job_id:
-        raise UploadError(f"createApiJob no devolvió api_job_id. Respuesta: {data}")
+        raise UploadError(f"createApiJob did not return an api_job_id. Response: {data}")
     return job_id
 
 
 def upload_file(client_id, token, company_id, api_job_id, filepath):
     url = f"{_api_base(company_id)}/classifications/job/import/uploadFile/{api_job_id}"
-    # Content-Type multipart lo pone requests con boundary; no lo forzamos.
+    # requests sets the multipart Content-Type with the boundary; we do not force it.
     headers = _auth_headers(client_id, token, content_type=None)
     filename = os.path.basename(filepath)
-    # Leemos el contenido a bytes una vez: si hay reintento por 429/5xx,
-    # requests reconstruye el multipart desde cero (un file handle ya
-    # consumido no se rebobinaría entre intentos).
+    # Read the content into bytes once: if there is a retry on 429/5xx,
+    # requests rebuilds the multipart from scratch (an already-consumed file
+    # handle would not be rewound between attempts).
     with open(filepath, "rb") as fh:
         content = fh.read()
     files = {"file": (filename, content, "text/csv")}
@@ -313,7 +314,7 @@ def upload_file(client_id, token, company_id, api_job_id, filepath):
     )
     if resp.status_code not in (200, 201, 202):
         raise UploadError(
-            f"uploadFile falló para job {api_job_id} (HTTP {resp.status_code})."
+            f"uploadFile failed for job {api_job_id} (HTTP {resp.status_code})."
         )
     return True
 
@@ -328,7 +329,7 @@ def commit_job(client_id, token, company_id, api_job_id):
     )
     if resp.status_code not in (200, 201, 202):
         raise UploadError(
-            f"commitApiJob falló para job {api_job_id} (HTTP {resp.status_code})."
+            f"commitApiJob failed for job {api_job_id} (HTTP {resp.status_code})."
         )
     data = resp.json() if resp.content else {}
     return data.get("import_job_id") or data.get("jobId") or api_job_id
@@ -336,17 +337,17 @@ def commit_job(client_id, token, company_id, api_job_id):
 
 def check_status(client_id, token, company_id, job_id):
     """
-    Consulta UNA vez el estado del job y lo normaliza.
+    Check the job status ONCE and normalize it.
 
-    Devuelve uno de: "completed", "failed" o "pending". No bloquea ni duerme;
-    el polling (con sus esperas) lo orquesta poll_all_jobs.
+    Returns one of: "completed", "failed" or "pending". It does not block or
+    sleep; polling (with its waits) is orchestrated by poll_all_jobs.
     """
     url = f"{_api_base(company_id)}/classifications/job/{job_id}"
     headers = _auth_headers(client_id, token, content_type=None)
     resp = _request_with_retry("GET", url, headers=headers, timeout=config.HTTP_TIMEOUT)
     if resp.status_code != 200:
         raise UploadError(
-            f"Consulta de estado falló para job {job_id} (HTTP {resp.status_code})."
+            f"Status check failed for job {job_id} (HTTP {resp.status_code})."
         )
     data = resp.json()
     status = (data.get("status") or data.get("state") or "").lower()
@@ -358,13 +359,13 @@ def check_status(client_id, token, company_id, job_id):
 
 
 # ------------------------------------------------------------------
-# FASE 1 — subir y confirmar (create + upload + commit) en paralelo
+# PHASE 1 — upload and commit (create + upload + commit) in parallel
 # ------------------------------------------------------------------
 def submit_one(client_id, token, company_id, dataset_id, filepath):
     """
-    Crea el job, sube el archivo y hace commit para UN archivo. No espera el
-    procesamiento: devuelve el job_id confirmado para que la fase de polling
-    lo consulte después. Pensada para correr concurrentemente.
+    Create the job, upload the file and commit for ONE file. Does not wait for
+    processing: it returns the committed job_id so the polling phase can check
+    it later. Intended to run concurrently.
     """
     filename = os.path.basename(filepath)
     api_job_id = create_job(
@@ -377,15 +378,15 @@ def submit_one(client_id, token, company_id, dataset_id, filepath):
 
 def submit_all(client_id, token, company_id, dataset_id, files):
     """
-    Sube y confirma todos los archivos en paralelo (acotado por
-    UPLOAD_CONCURRENCY). Devuelve (submitted, submit_failures):
-      - submitted: [{"file", "job_id"}] de los que llegaron a commit
-      - submit_failures: [{"file", "error"}] de los que fallaron al subir
+    Upload and commit all files in parallel (bounded by UPLOAD_CONCURRENCY).
+    Returns (submitted, submit_failures):
+      - submitted: [{"file", "job_id"}] of the ones that reached commit
+      - submit_failures: [{"file", "error"}] of the ones that failed to upload
     """
     submitted = []
     submit_failures = []
     workers = max(1, config.UPLOAD_CONCURRENCY)
-    print(f"\nFase 1/2: subiendo {len(files)} archivo(s) (concurrencia {workers})...")
+    print(f"\nPhase 1/2: uploading {len(files)} file(s) (concurrency {workers})...")
 
     with ThreadPoolExecutor(max_workers=workers) as pool:
         future_to_file = {
@@ -399,32 +400,32 @@ def submit_all(client_id, token, company_id, dataset_id, files):
             try:
                 result = future.result()
                 submitted.append(result)
-                print(f"   subido y confirmado: {filename} (job {result['job_id']})")
+                print(f"   uploaded and committed: {filename} (job {result['job_id']})")
             except (UploadError, requests.RequestException, OSError) as exc:
                 submit_failures.append({"file": filename, "error": str(exc)})
-                print(f"   FALLÓ la subida: {filename} ({exc})", file=sys.stderr)
+                print(f"   UPLOAD FAILED: {filename} ({exc})", file=sys.stderr)
 
     return submitted, submit_failures
 
 
 # ------------------------------------------------------------------
-# FASE 2 — polling de todos los jobs en paralelo hasta que terminen
+# PHASE 2 — poll all jobs in parallel until they finish
 # ------------------------------------------------------------------
 def poll_all_jobs(client_id, token, company_id, submitted):
     """
-    Hace polling de todos los jobs enviados hasta que terminen (completed/
-    failed) o se agote STATUS_POLL_MAX_ATTEMPTS. Cada ronda consulta los jobs
-    aún pendientes en paralelo (acotado por POLL_CONCURRENCY) y luego duerme
-    STATUS_POLL_INTERVAL antes de la siguiente ronda.
+    Poll all submitted jobs until they finish (completed/failed) or
+    STATUS_POLL_MAX_ATTEMPTS is exhausted. Each round checks the still-pending
+    jobs in parallel (bounded by POLL_CONCURRENCY) and then sleeps
+    STATUS_POLL_INTERVAL before the next round.
 
-    Devuelve un dict {job_id: "completed"|"failed"|"timeout"}.
+    Returns a dict {job_id: "completed"|"failed"|"timeout"}.
     """
     workers = max(1, config.POLL_CONCURRENCY)
     pending = {s["job_id"] for s in submitted}
     results = {}
     print(
-        f"\nFase 2/2: esperando procesamiento de {len(pending)} job(s) "
-        f"(concurrencia {workers})..."
+        f"\nPhase 2/2: waiting for processing of {len(pending)} job(s) "
+        f"(concurrency {workers})..."
     )
 
     for attempt in range(1, config.STATUS_POLL_MAX_ATTEMPTS + 1):
@@ -442,10 +443,10 @@ def poll_all_jobs(client_id, token, company_id, submitted):
                 try:
                     state = future.result()
                 except (UploadError, requests.RequestException) as exc:
-                    # Error consultando: lo dejamos pendiente para reintentar
-                    # en la próxima ronda, salvo que sea la última.
+                    # Error while checking: leave it pending to retry on the
+                    # next round, unless this is the last one.
                     print(
-                        f"   aviso: no se pudo consultar job {job_id} ({exc})",
+                        f"   warning: could not check job {job_id} ({exc})",
                         file=sys.stderr,
                     )
                     continue
@@ -454,10 +455,10 @@ def poll_all_jobs(client_id, token, company_id, submitted):
 
         pending = {j for j in pending if j not in results}
         if pending and attempt < config.STATUS_POLL_MAX_ATTEMPTS:
-            print(f"   {len(pending)} job(s) aún en proceso...")
+            print(f"   {len(pending)} job(s) still processing...")
             time.sleep(config.STATUS_POLL_INTERVAL)
 
-    # Lo que quede pendiente al agotar intentos se marca como timeout.
+    # Whatever is still pending when attempts run out is marked as timeout.
     for job_id in pending:
         results[job_id] = "timeout"
     return results
@@ -473,44 +474,44 @@ def find_output_csvs():
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Sube los CSV de clasificación a Adobe Analytics (API 2.0)."
+        description="Upload the classification CSVs to Adobe Analytics (API 2.0)."
     )
     parser.add_argument(
         "--file",
-        help="Ruta a un CSV específico. Si se omite, sube todos los de output/.",
+        help="Path to a specific CSV. If omitted, uploads all files in output/.",
     )
     parser.add_argument(
         "--list-datasets",
         action="store_true",
-        help="Lista los datasets de clasificación (para hallar el DATASET_ID) y sale.",
+        help="List the classification datasets (to find the DATASET_ID) and exit.",
     )
     parser.add_argument(
         "--rsid",
-        help="Report suite ID a consultar con --list-datasets. Si se omite, se "
-        "usa la variable de entorno ADOBE_RSID.",
+        help="Report suite ID to query with --list-datasets. If omitted, the "
+        "ADOBE_RSID environment variable is used.",
     )
     parser.add_argument(
         "--no-wait",
         action="store_true",
-        help="Sube y confirma todo, imprime los job IDs y sale SIN esperar el "
-        "procesamiento (fire-and-forget). Verifica el estado luego.",
+        help="Upload and commit everything, print the job IDs and exit WITHOUT "
+        "waiting for processing (fire-and-forget). Check the status later.",
     )
     args = parser.parse_args()
 
     try:
         client_id, token = get_access_token()
         company_id = get_company_id(client_id, token)
-        print(f"Autenticado. Global company id: {company_id}")
+        print(f"Authenticated. Global company id: {company_id}")
 
         if args.list_datasets:
             rsid = args.rsid or os.environ.get("ADOBE_RSID")
             if not rsid:
                 raise ConfigError(
-                    "Para listar datasets necesitas indicar el report suite ID: "
-                    "pasa --rsid <RSID> o define la variable de entorno ADOBE_RSID."
+                    "To list datasets you must provide the report suite ID: "
+                    "pass --rsid <RSID> or set the ADOBE_RSID environment variable."
                 )
             datasets = list_datasets(client_id, token, company_id, rsid)
-            print(f"\nDatasets de clasificación del report suite '{rsid}':")
+            print(f"\nClassification datasets for report suite '{rsid}':")
             print(datasets)
             return 0
 
@@ -523,74 +524,74 @@ def main():
 
         if not files:
             print(
-                "No se encontraron CSV para subir. Corre primero process_bot_flags.py "
-                "o pasa --file.",
+                "No CSVs found to upload. Run process_bot_flags.py first "
+                "or pass --file.",
                 file=sys.stderr,
             )
             return 1
 
-        # Filtramos los que no existen antes de arrancar las fases.
+        # Filter out the ones that do not exist before starting the phases.
         existing = []
         for filepath in files:
             if not os.path.isfile(filepath):
-                print(f"   omitido (no existe): {filepath}", file=sys.stderr)
+                print(f"   skipped (does not exist): {filepath}", file=sys.stderr)
                 continue
             existing.append(filepath)
 
         if not existing:
-            print("No hay archivos válidos para subir.", file=sys.stderr)
+            print("No valid files to upload.", file=sys.stderr)
             return 1
 
-        print(f"Archivos a subir: {len(existing)} (dataset {dataset_id})")
+        print(f"Files to upload: {len(existing)} (dataset {dataset_id})")
 
-        # --- Fase 1: subir y confirmar todo en paralelo ---
+        # --- Phase 1: upload and commit everything in parallel ---
         submitted, submit_failures = submit_all(
             client_id, token, company_id, dataset_id, existing
         )
 
-        # Fire-and-forget: no esperamos el procesamiento del lado de Adobe.
+        # Fire-and-forget: we do not wait for processing on Adobe's side.
         if args.no_wait:
             print("\n" + "=" * 60)
-            print("RESUMEN DE SUBIDA (sin esperar procesamiento)")
+            print("UPLOAD SUMMARY (not waiting for processing)")
             print("=" * 60)
             for s in submitted:
-                print(f"  {s['file']:35s} enviado    job={s['job_id']}")
+                print(f"  {s['file']:35s} submitted  job={s['job_id']}")
             for f in submit_failures:
-                print(f"  {f['file']:35s} FALLÓ subida", file=sys.stderr)
+                print(f"  {f['file']:35s} UPLOAD FAILED", file=sys.stderr)
             print(
-                f"\n{len(submitted)} enviado(s), {len(submit_failures)} con error de subida."
+                f"\n{len(submitted)} submitted, {len(submit_failures)} with upload errors."
             )
             return 1 if submit_failures else 0
 
-        # --- Fase 2: polling paralelo de todos los jobs confirmados ---
+        # --- Phase 2: parallel polling of all committed jobs ---
         job_states = {}
         if submitted:
             job_states = poll_all_jobs(client_id, token, company_id, submitted)
 
         print("\n" + "=" * 60)
-        print("RESUMEN DE SUBIDA")
+        print("UPLOAD SUMMARY")
         print("=" * 60)
         failures = 0
         for s in submitted:
-            state = job_states.get(s["job_id"], "desconocido")
+            state = job_states.get(s["job_id"], "unknown")
             print(f"  {s['file']:35s} {state:11s} job={s['job_id']}")
             if state != "completed":
                 failures += 1
         for f in submit_failures:
-            print(f"  {f['file']:35s} error-subida", file=sys.stderr)
+            print(f"  {f['file']:35s} upload-error", file=sys.stderr)
             failures += 1
         print(
             f"\nTotal: {len(existing)} | ok: {len(existing) - failures} | "
-            f"con problemas: {failures}"
+            f"with problems: {failures}"
         )
         return 1 if failures else 0
 
     except (ConfigError, UploadError) as exc:
-        # Fail-closed: mensaje claro, sin volcar secretos ni stack traces.
+        # Fail-closed: clear message, without dumping secrets or stack traces.
         print(f"ERROR: {exc}", file=sys.stderr)
         return 2
     except requests.RequestException as exc:
-        print(f"ERROR de red: {exc.__class__.__name__}", file=sys.stderr)
+        print(f"NETWORK ERROR: {exc.__class__.__name__}", file=sys.stderr)
         return 2
 
 

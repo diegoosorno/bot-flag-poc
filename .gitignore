@@ -1,12 +1,12 @@
-# No subir datos reales (ECID es información de visitante — no debe
-# terminar en un repo de GitHub, aunque sea privado).
+# Do not push real data (ECID is visitor information — it must not
+# end up in a GitHub repo, even a private one).
 input/*
 !input/.gitkeep
 
 output/*
 !output/.gitkeep
 
-# Secretos / credenciales — NUNCA subir al repo (es público)
+# Secrets / credentials — NEVER push to the repo (it is public)
 .env
 .env.local
 .env.*.local

@@ -1,26 +1,26 @@
 """
-Bot Flag POC — procesamiento de exports de Adobe Data Warehouse
+Bot Flag POC — processing of Adobe Data Warehouse exports
 
-Toma los 3 exports de Data Warehouse (Bots_Tier_1/2/3, uno por nivel de
-confianza), remueve las filas con ECID vacío (solo ceros), reconcilia los
-ECID que aparecen en más de un tier (gana el nivel más alto), y genera
-un CSV final en formato Classification/SAINT (Key, Bot Flag) listo para
-subir como clasificación de eVar23 en Adobe Analytics.
+Takes the 3 Data Warehouse exports (Bots_Tier_1/2/3, one per confidence
+level), removes rows with an empty ECID (all zeros), reconciles the ECIDs that
+appear in more than one tier (the highest level wins), and produces a final CSV
+in Classification/SAINT format (Key, Bot Flag) ready to upload as an eVar23
+classification in Adobe Analytics.
 
-Uso:
-    1. Coloca los 3 archivos (.zip o .csv) dentro de la carpeta input/
-    2. Ejecuta: python process_bot_flags.py
-    3. El resultado queda en la carpeta output/
+Usage:
+    1. Place the 3 files (.zip or .csv) inside the input/ folder
+    2. Run: python process_bot_flags.py
+    3. The result is written to the output/ folder
 
-Formato de entrada esperado (export estándar de Data Warehouse):
-    - CSV con encabezados en la primera fila.
-    - Columna "Marketing Cloud Visitor ID" (el ECID).
-    - Columna "Unique Visitors" (no se usa, se ignora).
-    - Puede venir dentro de un .zip o como .csv directo.
+Expected input format (standard Data Warehouse export):
+    - CSV with headers in the first row.
+    - "Marketing Cloud Visitor ID" column (the ECID).
+    - "Unique Visitors" column (not used, ignored).
+    - May come inside a .zip or as a direct .csv.
 
-Formato de salida:
-    - CSV UTF-8, separado por comas.
-    - Columnas: Key, Bot Flag (valores: high / medium / low).
+Output format:
+    - UTF-8 CSV, comma-separated.
+    - Columns: Key, Bot Flag (values: high / medium / low).
 """
 
 import pandas as pd
@@ -36,7 +36,7 @@ ZERO_ECID_PATTERN = re.compile(r"^0+$")
 
 
 def find_input_files(folder):
-    """Encuentra los 3 archivos de entrada (zip o csv) según el patrón de nombre."""
+    """Find the 3 input files (zip or csv) by their name pattern."""
     found = {}
     missing = []
     for pattern, tier in config.TIER_MAP.items():
@@ -47,16 +47,16 @@ def find_input_files(folder):
             found[tier] = matches[0]
     if missing:
         raise FileNotFoundError(
-            f"No se encontraron archivos para estos patrones en '{folder}': {missing}. "
-            f"Verifica que los 3 archivos estén en la carpeta input/."
+            f"No files found for these patterns in '{folder}': {missing}. "
+            f"Check that the 3 files are in the input/ folder."
         )
     return found
 
 
 def open_as_dataframe_iterator(filepath):
     """
-    Abre un archivo .zip (con un .csv/.txt dentro) o un .csv directamente,
-    devolviendo un iterador de chunks de pandas.
+    Open a .zip file (with a .csv/.txt inside) or a .csv directly,
+    returning a pandas chunk iterator.
     """
     if filepath.lower().endswith(".zip"):
         with zipfile.ZipFile(filepath) as z:
@@ -65,7 +65,7 @@ def open_as_dataframe_iterator(filepath):
                 if n.lower().endswith(".csv") or n.lower().endswith(".txt")
             ]
             if not data_names:
-                raise ValueError(f"No se encontró un CSV/TXT dentro de {filepath}")
+                raise ValueError(f"No CSV/TXT found inside {filepath}")
             with z.open(data_names[0]) as f:
                 content = f.read()
             buffer = io.BytesIO(content)
@@ -75,7 +75,7 @@ def open_as_dataframe_iterator(filepath):
 
 
 def process_file(filepath, tier, stats):
-    """Procesa un archivo de un tier y devuelve un dict {ecid: tier}."""
+    """Process one tier's file and return a dict {ecid: tier}."""
     ecid_to_tier = {}
     total_rows = 0
     zero_rows_removed = 0
@@ -83,8 +83,8 @@ def process_file(filepath, tier, stats):
     for chunk in open_as_dataframe_iterator(filepath):
         if config.ECID_COLUMN not in chunk.columns:
             raise ValueError(
-                f"El archivo {filepath} no tiene la columna esperada "
-                f"'{config.ECID_COLUMN}'. Columnas encontradas: {list(chunk.columns)}"
+                f"The file {filepath} does not have the expected column "
+                f"'{config.ECID_COLUMN}'. Columns found: {list(chunk.columns)}"
             )
         total_rows += len(chunk)
 
@@ -109,7 +109,7 @@ def process_file(filepath, tier, stats):
 
 
 def reconcile(all_tiers_dicts):
-    """Combina los diccionarios ECID->tier, quedándose con el tier más alto por ECID."""
+    """Merge the ECID->tier dicts, keeping the highest tier per ECID."""
     combined = {}
     duplicates_resolved = 0
 
@@ -126,7 +126,7 @@ def reconcile(all_tiers_dicts):
 
 
 def write_output(combined, output_folder):
-    """Escribe el CSV final, dividiéndolo en partes si excede el tamaño máximo."""
+    """Write the final CSV, splitting it into parts if it exceeds the max size."""
     os.makedirs(output_folder, exist_ok=True)
     rows = list(combined.items())
     df = pd.DataFrame(rows, columns=[config.OUTPUT_KEY_COLUMN, config.OUTPUT_FLAG_COLUMN])
@@ -154,7 +154,7 @@ def write_output(combined, output_folder):
 
 def main():
     print("=" * 60)
-    print("Bot Flag POC — procesando exports de Data Warehouse")
+    print("Bot Flag POC — processing Data Warehouse exports")
     print("=" * 60)
 
     input_files = find_input_files(config.INPUT_FOLDER)
@@ -162,36 +162,36 @@ def main():
     all_tiers_dicts = {}
 
     for tier, filepath in input_files.items():
-        print(f"\nProcesando tier '{tier}': {os.path.basename(filepath)}")
+        print(f"\nProcessing tier '{tier}': {os.path.basename(filepath)}")
         ecid_dict = process_file(filepath, tier, stats)
         all_tiers_dicts[tier] = ecid_dict
         s = stats[tier]
-        print(f"  Filas leídas: {s['total_rows_read']}")
-        print(f"  Filas con ECID de ceros removidas: {s['zero_ecid_rows_removed']}")
-        print(f"  ECIDs únicos: {s['unique_ecids']}")
+        print(f"  Rows read: {s['total_rows_read']}")
+        print(f"  Zero-ECID rows removed: {s['zero_ecid_rows_removed']}")
+        print(f"  Unique ECIDs: {s['unique_ecids']}")
 
-    print("\nReconciliando duplicados entre tiers (gana el nivel más alto)...")
+    print("\nReconciling duplicates across tiers (highest level wins)...")
     combined, duplicates_resolved = reconcile(all_tiers_dicts)
-    print(f"  Duplicados resueltos: {duplicates_resolved}")
-    print(f"  Total ECIDs únicos combinados: {len(combined)}")
+    print(f"  Duplicates resolved: {duplicates_resolved}")
+    print(f"  Total unique combined ECIDs: {len(combined)}")
 
-    print("\nEscribiendo archivo(s) de salida...")
+    print("\nWriting output file(s)...")
     output_files, total_output_rows = write_output(combined, config.OUTPUT_FOLDER)
     for f in output_files:
         size_mb = os.path.getsize(f) / (1024 * 1024)
         print(f"  {f}  ({size_mb:.1f} MB)")
 
     print("\n" + "=" * 60)
-    print("RESUMEN FINAL")
+    print("FINAL SUMMARY")
     print("=" * 60)
     for tier, s in stats.items():
         print(
-            f"  {tier:8s} -> leídas: {s['total_rows_read']:>10} | "
-            f"ceros removidos: {s['zero_ecid_rows_removed']:>6} | "
-            f"únicos: {s['unique_ecids']:>10}"
+            f"  {tier:8s} -> read: {s['total_rows_read']:>10} | "
+            f"zeros removed: {s['zero_ecid_rows_removed']:>6} | "
+            f"unique: {s['unique_ecids']:>10}"
         )
-    print(f"  Duplicados resueltos entre tiers: {duplicates_resolved}")
-    print(f"  Filas en archivo(s) de salida: {total_output_rows}")
+    print(f"  Duplicates resolved across tiers: {duplicates_resolved}")
+    print(f"  Rows in output file(s): {total_output_rows}")
 
 
 if __name__ == "__main__":
