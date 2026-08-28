@@ -71,9 +71,56 @@ carpetas `input/` y `output/` están excluidas en `.gitignore` (solo se
 versiona la estructura de carpetas vía `.gitkeep`). No remuevas esa
 regla del `.gitignore` al clonar/replicar el proyecto en otra máquina.
 
-## Siguiente paso
+## Siguiente paso — subida a Classifications
 
-El archivo de salida (`Key`, `Bot Flag`) se sube directamente en
-Admin > Classifications > eVar23 > Import File (o vía FTP si el
-archivo es grande), mapeando `Key` al ECID y `Bot Flag` a la
+El archivo de salida (`Key`, `Bot Flag`) se puede subir de dos formas:
+
+**Manual:** Admin > Classifications > eVar23 > Import File (o vía FTP si
+el archivo es grande), mapeando `Key` al ECID y `Bot Flag` a la
 clasificación creada para ese propósito.
+
+**Automático (recomendado):** `upload_classifications.py` sube los CSV de
+`output/` vía la **Classifications API 2.0** (flujo createApiJob →
+uploadFile → commitApiJob → polling de estado). Autenticación con OAuth
+Server-to-Server (JWT está deprecado).
+
+### Credenciales (nunca se guardan en el repo)
+
+El script lee las credenciales solo de variables de entorno:
+
+```bash
+export ADOBE_CLIENT_ID=...        # client_id del proyecto de Developer Console
+export ADOBE_CLIENT_SECRET=...    # client_secret — NUNCA en el código
+export ADOBE_DATASET_ID=...       # dataset de clasificación de eVar23
+# Opcionales:
+export ADOBE_COMPANY_ID=...       # si se omite, se descubre vía Discovery API
+export ADOBE_SCOPES=...           # si se omite, usa el default de config.py
+```
+
+### Cómo hallar el DATASET_ID (una sola vez)
+
+```bash
+python upload_classifications.py --list-datasets
+```
+
+Busca en la salida el dataset asociado a la clasificación de `eVar23` y
+copia su id a `ADOBE_DATASET_ID`.
+
+### Subir
+
+```bash
+# Sube todos los output/bot_flag_upload*.csv:
+python upload_classifications.py
+
+# Sube uno específico:
+python upload_classifications.py --file output/bot_flag_upload_part2.csv
+```
+
+El script imprime el estado de cada job y sale con código distinto de 0
+si alguno falló, para poder encadenarlo en CI/cron.
+
+> Nota: los nombres exactos de campos de la API 2.0 (p. ej. el campo del
+> multipart en `uploadFile` y las claves del JSON de respuesta) pueden
+> variar según la versión; el script contempla variantes comunes, pero si
+> Adobe cambia el contrato conviene validar contra la
+> [doc oficial](https://developer.adobe.com/analytics-apis/docs/2.0/guides/endpoints/classifications/import-file).
