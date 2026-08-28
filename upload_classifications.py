@@ -50,6 +50,15 @@ import requests
 
 import config
 
+# Carga .env si python-dotenv está instalado (opcional). Si no lo está, el
+# script sigue funcionando con variables ya exportadas en el entorno.
+try:
+    from dotenv import load_dotenv
+
+    load_dotenv(os.path.join(config.BASE_DIR, ".env"))
+except ImportError:
+    pass
+
 
 class ConfigError(Exception):
     """Falta configuración (credenciales/env) necesaria para operar."""

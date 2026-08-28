@@ -86,15 +86,35 @@ Server-to-Server (JWT está deprecado).
 
 ### Credenciales (nunca se guardan en el repo)
 
-El script lee las credenciales solo de variables de entorno:
+El script lee las credenciales solo de variables de entorno. La forma
+recomendada es un archivo `.env` local (ignorado por git):
 
 ```bash
-export ADOBE_CLIENT_ID=...        # client_id del proyecto de Developer Console
-export ADOBE_CLIENT_SECRET=...    # client_secret — NUNCA en el código
-export ADOBE_DATASET_ID=...       # dataset de clasificación de eVar23
+cp .env.example .env
+# edita .env y pon tus valores reales
+```
+
+`.env` está en `.gitignore` y **nunca** debe subirse (el repo es público).
+El script lo carga solo si tienes `python-dotenv` instalado
+(`pip install -r requirements.txt`).
+
+Variables:
+
+```bash
+ADOBE_CLIENT_ID=...        # client_id del proyecto de Developer Console
+ADOBE_CLIENT_SECRET=...    # client_secret — NUNCA en el código
+ADOBE_DATASET_ID=...       # dataset de clasificación de eVar23
 # Opcionales:
-export ADOBE_COMPANY_ID=...       # si se omite, se descubre vía Discovery API
-export ADOBE_SCOPES=...           # si se omite, usa el default de config.py
+ADOBE_COMPANY_ID=...       # si se omite, se descubre vía Discovery API
+ADOBE_SCOPES=...           # si se omite, usa el default de config.py
+```
+
+Alternativa sin `.env` (exportarlas a mano en la terminal):
+
+```bash
+export ADOBE_CLIENT_ID=...
+export ADOBE_CLIENT_SECRET=...
+export ADOBE_DATASET_ID=...
 ```
 
 ### Cómo hallar el DATASET_ID (una sola vez)
